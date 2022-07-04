@@ -1,0 +1,64 @@
+# This is the Gradle build system for JVM applications
+# https://gradle.org/
+# https://github.com/gradle/gradle
+image: gradle:alpine
+
+# Disable the Gradle daemon for Continuous Integration servers as correctness
+# is usually a priority over speed in CI environments. Using a fresh
+# runtime for each build is more reliable since the runtime is completely
+# isolated from any previous builds.
+variables:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+  PROD_APP_NAME: si-bot-builder
+  CONTAINER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+
+before_script:
+  - export GRADLE_USER_HOME=`pwd`/.gradle
+
+build:
+  stage: build
+  script: gradle --build-cache assemble
+  cache:
+    key: "$CI_COMMIT_REF_NAME"
+    policy: push
+    paths:
+      - build
+      - .gradle
+
+test:
+  stage: test
+  script: gradle check
+  cache:
+    key: "$CI_COMMIT_REF_NAME"
+    policy: pull
+    paths:
+      - build
+      - .gradle
+
+heroku_build:
+  stage: build
+  only:
+    changes:
+      - CHANGELOG.md
+  image: docker:19.03.1
+  services:
+    - docker:19.03.1-dind
+  variables:
+    HEROKU_PROD_IMAGE: registry.heroku.com/${PROD_APP_NAME}/web
+  script:
+    - docker login --username=_ --password=$HEROKU_API_KEY registry.heroku.com
+    - docker build -t $CONTAINER_IMAGE .
+    - docker tag $CONTAINER_IMAGE $HEROKU_PROD_IMAGE
+    - docker push $HEROKU_PROD_IMAGE
+
+deploy:
+  stage: deploy
+  only:
+    changes:
+      - CHANGELOG.md
+  image: debian:latest
+  script:
+    - apt-get update -qy
+    - apt-get install -y curl bash
+    - curl https://cli-assets.heroku.com/install.sh | sh
+    - heroku container:release -a ${PROD_APP_NAME} web
